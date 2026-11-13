@@ -18,6 +18,7 @@ SEED_CSV = os.environ.get("INITIAL_CSV", str(BASE_DIR.parent / "data" / "initial
 app = FastAPI(title="植被调查离线修订合并")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.globals["FIELD_LABELS"] = FIELD_LABELS
+templates.env.globals["REASON_TEXT"] = db.REASON_TEXT
 
 
 @app.on_event("startup")
@@ -57,6 +58,7 @@ def index(request: Request, msg: str = ""):
             "records": db.get_records(),
             "baselines": db.list_baselines(),
             "previews": db.list_previews(),
+            "quadrats": db.list_quadrats(),
             "msg": msg,
         },
     )
@@ -91,8 +93,66 @@ def record_update(rid: str, quadrat: str = Form(...), species: str = Form(...), 
 @app.post("/records/{rid}/delete")
 def record_delete(rid: str):
     if db.delete_record(rid):
-        return redirect("/", f"已删除记录 {rid}")
+        return redirect("/", f"已删除记录 {rid}，受影响样方若已核准已转待复核")
     return redirect("/", f"记录 {rid} 不存在")
+
+
+# ---------------- 样方复核 / 核准 ----------------
+
+
+@app.get("/reviews", response_class=HTMLResponse)
+def reviews(request: Request, msg: str = ""):
+    records, pending = db.get_approved_export()
+    return templates.TemplateResponse(
+        request,
+        "reviews.html",
+        {
+            "request": request,
+            "quadrats": db.list_quadrats(),
+            "events": db.list_approval_events(),
+            "approved_records": records,
+            "pending_quadrats": pending,
+            "msg": msg,
+        },
+    )
+
+
+@app.get("/reviews/{quadrat}", response_class=HTMLResponse)
+def review_detail(request: Request, quadrat: str, msg: str = ""):
+    detail = db.get_quadrat(quadrat)
+    if not detail:
+        return redirect("/reviews", f"样方 {quadrat} 不存在或已无记录")
+    return templates.TemplateResponse(
+        request, "review_detail.html", {"request": request, "d": detail, "msg": msg}
+    )
+
+
+@app.post("/reviews/{quadrat}/approve")
+def review_approve(quadrat: str, expected_hash: str = Form(...)):
+    try:
+        result = db.approve_quadrat(quadrat, expected_hash)
+    except db.StaleApprovalError as e:
+        return redirect(f"/reviews/{quadrat}", f"核准被拒绝：{e}")
+    except ValueError as e:
+        return redirect("/reviews", str(e))
+    return redirect(
+        f"/reviews/{quadrat}",
+        f"样方 {quadrat} 已核准，绑定 {result['record_count']} 条记录及全部当前值",
+    )
+
+
+@app.get("/approved-export.csv")
+def approved_export():
+    # 状态与记录在同一个读事务内读取，取自同一已提交状态
+    records, pending = db.get_approved_export()
+    headers = {
+        "Content-Disposition": "attachment; filename=approved_records.csv",
+        # 网页据此展示被排除的待复核样方清单（与导出同一读取来源）
+        "X-Excluded-Pending-Quadrat": ", ".join(p["quadrat"] for p in pending),
+    }
+    return PlainTextResponse(
+        dump_csv(records), media_type="text/csv; charset=utf-8", headers=headers
+    )
 
 
 # ---------------- 导出 / 基线 ----------------
@@ -194,19 +254,7 @@ async def preview_confirm(token: str, request: Request):
     if pv["status"] != "pending":
         return redirect("/", "该预览已处理，不能重复确认")
 
-    # 1) 过期检测：仅核对计划触及的记录；无关记录变化不影响确认
-    fresh = db.get_records_by_ids(pv["plan"]["involved"])
-    if fresh != pv["snapshot"]:
-        baseline = db.get_baseline(pv["baseline_id"])
-        current = db.get_records()
-        plan = compute_plan(baseline["data"], pv["revision"], current)
-        snapshot = db.get_records_by_ids(plan["involved"])
-        db.update_preview_plan(
-            token, snapshot, plan, "拟改记录在预览后又被修改或删除，旧预览已作废并按最新当前记录重新比较，请重新核对。"
-        )
-        return redirect(f"/previews/{token}")
-
-    # 2) 汇总人工裁决
+    # 2) 汇总人工裁决（先取表单，临界区内不再 await）
     form = await request.form()
     resolutions = {}
     for conf in pv["plan"]["conflicts"]:
@@ -224,15 +272,29 @@ async def preview_confirm(token: str, request: Request):
             if v in ("rev", "cur"):
                 resolutions[rid] = {"_": v}
 
-    # 3) 合成最终动作并单事务应用；失败则当前数据不变
-    try:
-        actions = build_final_actions(pv["plan"], resolutions)
-    except ValueError as e:
-        return redirect(f"/previews/{token}", str(e))
-    try:
-        db.apply_actions(actions)
-    except Exception as e:
-        return redirect(f"/previews/{token}", f"应用失败，当前数据未改变：{e}")
+    # 1)+3) 过期检测、动作合成与单事务应用放在同一把锁内，
+    # 防止并发确认/维护在"检查-应用"之间插入改动
+    with db.LOCK:
+        fresh = db.get_records_by_ids(pv["plan"]["involved"])
+        if fresh != pv["snapshot"]:
+            baseline = db.get_baseline(pv["baseline_id"])
+            current = db.get_records()
+            plan = compute_plan(baseline["data"], pv["revision"], current)
+            snapshot = db.get_records_by_ids(plan["involved"])
+            db.update_preview_plan(
+                token, snapshot, plan,
+                "拟改记录在预览后又被修改或删除，旧预览已作废并按最新当前记录重新比较，请重新核对。",
+            )
+            return redirect(f"/previews/{token}")
+
+        try:
+            actions = build_final_actions(pv["plan"], resolutions)
+        except ValueError as e:
+            return redirect(f"/previews/{token}", str(e))
+        try:
+            db.apply_actions(actions)
+        except Exception as e:
+            return redirect(f"/previews/{token}", f"应用失败，当前数据未改变：{e}")
 
     db.set_preview_status(token, "applied", f"已应用 {len(actions)} 项离线改动")
     return redirect("/", f"合并完成：已应用 {len(actions)} 项离线改动")

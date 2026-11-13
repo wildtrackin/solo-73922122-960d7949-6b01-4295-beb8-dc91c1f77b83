@@ -1,8 +1,18 @@
 services:
-  web:
+  web1:
     build: .
     ports:
       - "8000:8000"
+    environment:
+      - DB_PATH=/data/app.db
+    volumes:
+      - survey-data:/data
+    restart: unless-stopped
+
+  web2:
+    build: .
+    ports:
+      - "8001:8000"
     environment:
       - DB_PATH=/data/app.db
     volumes:

@@ -3,6 +3,26 @@
 {% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
 
 <section>
+  <h2>样方复核状态（共 {{ quadrats|length }} 个样方）<a class="btn plain" style="float:right" href="/reviews">前往复核页</a></h2>
+  <table>
+    <tr><th>样方</th><th>记录数</th><th>复核状态</th><th>核准时间</th><th>操作</th></tr>
+    {% for q in quadrats %}
+    <tr>
+      <td>{{ q.quadrat }}</td>
+      <td>{{ q.record_count }}</td>
+      <td>
+        {% if q.approved %}<span class="tag ok">已核准</span>
+        {% else %}<span class="tag wait">待复核</span>{% endif %}
+      </td>
+      <td>{{ q.approved_at or '—' }}</td>
+      <td><a class="btn plain" href="/reviews/{{ q.quadrat }}">打开复核页</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">人工维护或离线合并对已核准样方造成增删、改值或迁入迁出时，该样方立即转待复核；改回原值或同 ID 重建也不能恢复旧核准。</p>
+</section>
+
+<section>
   <h2>① 当前记录（共 {{ records|length }} 条）<a class="btn plain" style="float:right" href="/export.csv">导出当前 CSV</a></h2>
   <table>
     <tr><th>ID</th><th>样方</th><th>物种</th><th>株数</th><th>操作</th></tr>

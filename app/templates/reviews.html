@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}样方复核 / 核准导出{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>① 样方复核（初始均为待复核）</h2>
+  <table>
+    <tr><th>样方</th><th>记录数</th><th>复核状态</th><th>核准时间</th><th>操作</th></tr>
+    {% for q in quadrats %}
+    <tr>
+      <td>{{ q.quadrat }}</td>
+      <td>{{ q.record_count }}</td>
+      <td>
+        {% if q.approved %}<span class="tag ok">已核准</span>
+        {% else %}<span class="tag wait">待复核</span>{% endif %}
+      </td>
+      <td>{{ q.approved_at or '—' }}</td>
+      <td><a class="btn" href="/reviews/{{ q.quadrat }}">查看全部记录并复核</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">核准绑定复核页所见的完整成员和值；复核期间样方若发生增删或改值，提交时旧核准会被拒绝。
+    其他样方的变化不影响本样方核准。</p>
+</section>
+
+<section>
+  <h2>② 核准 CSV 导出（只含已核准样方的全部记录，共 {{ approved_records|length }} 条）</h2>
+  <p><a class="btn" href="/approved-export.csv">下载核准 CSV（approved_records.csv）</a></p>
+  <p>下列 <b>{{ pending_quadrats|length }}</b> 个待复核样方的记录被排除在核准 CSV 之外：</p>
+  {% if pending_quadrats %}
+  <table>
+    <tr><th>被排除的待复核样方</th><th>记录数</th><th>操作</th></tr>
+    {% for p in pending_quadrats %}
+    <tr>
+      <td>{{ p.quadrat }}</td><td>{{ p.record_count }}</td>
+      <td><a class="btn plain" href="/reviews/{{ p.quadrat }}">前往复核</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">无待复核样方，全部记录均在核准 CSV 内。</p>
+  {% endif %}
+  <p class="muted">核准状态与导出记录在同一数据库读事务内读取，取自同一已提交状态。</p>
+</section>
+
+<section>
+  <h2>③ 核准与失效记录（最近 {{ events|length }} 条）</h2>
+  {% if events %}
+  <table>
+    <tr><th>时间</th><th>样方</th><th>事件</th><th>原因 / 说明</th><th>绑定快照哈希</th></tr>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.event_at }}</td>
+      <td>{{ e.quadrat }}</td>
+      <td>
+        {% if e.kind == 'approved' %}<span class="tag ok">核准</span>
+        {% else %}<span class="tag revoked">核准失效</span>{% endif %}
+      </td>
+      <td>
+        {% if e.kind == 'revoked' %}{{ REASON_TEXT.get(e.reason, e.reason) }}：{{ e.detail }}
+        {% else %}{{ e.detail }}{% endif %}
+      </td>
+      <td class="mono">{{ e.snapshot_hash[:12] if e.snapshot_hash else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">尚无核准记录。</p>{% endif %}
+</section>
+{% endblock %}

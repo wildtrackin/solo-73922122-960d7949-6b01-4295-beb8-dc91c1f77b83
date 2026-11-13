@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}样方 {{ d.quadrat }} 复核{% endblock %}
+{% block content %}
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+
+<section>
+  <h2>样方 {{ d.quadrat }} 的全部记录（{{ d.records|length }} 条）</h2>
+  <p>
+    复核状态：
+    {% if d.approval and d.approval.valid %}
+      <span class="tag ok">已核准</span>（核准时间 {{ d.approval.approved_at }}）
+    {% else %}
+      <span class="tag wait">待复核</span>
+    {% endif %}
+  </p>
+  <table>
+    <tr><th>ID</th><th>样方</th><th>物种</th><th>株数</th></tr>
+    {% for rid, r in d.records.items() %}
+    <tr><td>{{ rid }}</td><td>{{ r.quadrat }}</td><td>{{ r.species }}</td><td>{{ r.count }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="mono">当前内容快照哈希：{{ d.current_hash }}</p>
+  <p class="muted">
+    复核期间可照常回首页编辑。提交核准时将重新核对本样方：若期间发生过新增、删除或改值
+    （包括删除后同 ID 重建、改回原值），本次旧核准将被拒绝，请按最新记录重新复核；
+    其他样方的变化不影响本样方核准。同值保存不会撤销已有核准。
+  </p>
+  <form method="post" action="/reviews/{{ d.quadrat }}/approve">
+    <input type="hidden" name="expected_hash" value="{{ d.current_hash }}">
+    <button type="submit" onclick="return confirm('确认核准样方 {{ d.quadrat }} 的全部 {{ d.records|length }} 条记录？')">
+      核对无误，核准该样方
+    </button>
+    <a class="btn plain" href="/reviews">返回复核列表</a>
+    <a class="btn plain" href="/">回首页编辑记录</a>
+  </form>
+</section>
+
+<section>
+  <h2>本样方核准 / 失效历史</h2>
+  {% if d.events %}
+  <table>
+    <tr><th>时间</th><th>事件</th><th>原因 / 说明</th><th>绑定快照哈希</th></tr>
+    {% for e in d.events %}
+    <tr>
+      <td>{{ e.event_at }}</td>
+      <td>
+        {% if e.kind == 'approved' %}<span class="tag ok">核准</span>
+        {% else %}<span class="tag revoked">核准失效（转待复核）</span>{% endif %}
+      </td>
+      <td>
+        {% if e.kind == 'revoked' %}{{ REASON_TEXT.get(e.reason, e.reason) }}：{{ e.detail }}
+        {% else %}{{ e.detail }}{% endif %}
+      </td>
+      <td class="mono">{{ e.snapshot_hash[:12] if e.snapshot_hash else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">尚无核准记录，初始状态为待复核。</p>{% endif %}
+  <p class="muted">人工维护或离线合并造成的增删、改值、迁入迁出都会使已核准样方立即转待复核；
+    即使改回原值或用同 ID 重建，旧核准也不会恢复，需重新核准。</p>
+</section>
+{% endblock %}
